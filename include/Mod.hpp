@@ -12,6 +12,11 @@ AI involvement: Gemini Pro refined with atomic rollback and state manifest.
 #include <fstream>
 #include <system_error>
 
+enum class TransferType {
+    COPY, MOVE, DELETE
+};
+
+
 class ModManifest {
 private:
     std::string id_;
@@ -59,22 +64,47 @@ private:
     }
 
     void rollback(const std::vector<std::filesystem::path>& processed_files) {
-        std::cerr << "[ROLLBACK] Reverting partial installation..." << std::endl;
-        std::error_code err_code;
 
         for (const auto& rel_path : processed_files) {
             std::filesystem::path game_file_path = game_directory_ / rel_path;
             std::filesystem::path backup_file_path = backup_directory_ / rel_path;
 
-            if (std::filesystem::exists(game_file_path)) {
-                std::filesystem::remove(game_file_path, err_code);
-            }
-            if (std::filesystem::exists(backup_file_path)) {
-                std::filesystem::copy_file(backup_file_path, game_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-                std::filesystem::remove(backup_file_path, err_code);
-            }
+            transfer_file(TransferType::MOVE, backup_file_path, game_file_path);
         }
         clear_state();
+    }
+
+    void transfer_file(TransferType transfer_type, const std::filesystem::path& file_path) {
+        std::error_code err_code;
+        if (transfer_type == TransferType::DELETE) {
+            if (std::filesystem::exists(file_path)) {
+                std::filesystem::remove(file_path, err_code);
+            }
+        }
+        if (err_code) {
+            // raise error?
+            std::cerr << "File transfer failed: " << file_path << std::endl;
+        }
+    }
+
+    void transfer_file(TransferType transfer_type, const std::filesystem::path &source_file_path, std::filesystem::path &destination_file_path) {
+        std::error_code err_code;
+        if (transfer_type == TransferType::COPY and transfer_type == TransferType::MOVE) {
+            if (std::filesystem::exists(destination_file_path)) {
+                std::filesystem::remove(destination_file_path, err_code);
+            }
+            if (std::filesystem::exists(source_file_path)) {
+                std::filesystem::create_directories(destination_file_path.parent_path());
+                std::filesystem::copy_file(source_file_path, destination_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
+                if (transfer_type == TransferType::MOVE) {
+                    std::filesystem::remove(source_file_path, err_code);
+                }
+            }
+        }
+        if (err_code) {
+            // raise error?
+            std::cerr << "File transfer failed: " << source_file_path << std::endl;
+        }
     }
 
 public:
@@ -102,25 +132,27 @@ public:
                 return false;
             }
 
-            // backup
-            if (std::filesystem::exists(game_file_path) && !std::filesystem::exists(backup_file_path)) {
-                std::filesystem::create_directories(backup_file_path.parent_path());
-                std::filesystem::copy_file(game_file_path, backup_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-                if (err_code) {
-                    std::cerr << "Backup failed for " << game_file_path << ": " << err_code.message() << std::endl;
-                    rollback(processed_files);
-                    return false;
-                }
-            }
+            // move to backup
+            transfer_file(TransferType::MOVE, game_file_path, backup_file_path);
+            //if (std::filesystem::exists(game_file_path) && !std::filesystem::exists(backup_file_path)) {
+            //    std::filesystem::create_directories(backup_file_path.parent_path());
+            //    std::filesystem::copy_file(game_file_path, backup_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
+            //    if (err_code) {
+            //        std::cerr << "Backup failed for " << game_file_path << ": " << err_code.message() << std::endl;
+            //        rollback(processed_files);
+            //        return false;
+            //    }
+            //}
 
-            // overwrite by copy
-            std::filesystem::create_directories(game_file_path.parent_path());
-            std::filesystem::copy_file(mod_file_path, game_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-            if (err_code) {
-                std::cerr << "File copy failed for " << rel_path << ": " << err_code.message() << std::endl;
-                rollback(processed_files);
-                return false;
-            }
+            // copy from mod to game
+            transfer_file(TransferType::COPY, mod_file_path, game_file_path);
+            //std::filesystem::create_directories(game_file_path.parent_path());
+            //std::filesystem::copy_file(mod_file_path, game_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
+            //if (err_code) {
+            //    std::cerr << "File copy failed for " << rel_path << ": " << err_code.message() << std::endl;
+            //    rollback(processed_files);
+            //    return false;
+            //}
 
             // Track successful copies for potential rollback
             processed_files.push_back(rel_path);
@@ -138,16 +170,7 @@ public:
             std::filesystem::path game_file_path = game_directory_ / rel_path;
             std::filesystem::path backup_file_path = backup_directory_ / rel_path;
 
-            // remove the copied mod file from game folder
-            if (std::filesystem::exists(game_file_path)) {
-                std::filesystem::remove(game_file_path, err_code);
-            }
-
-            // restore
-            if (std::filesystem::exists(backup_file_path)) {
-                std::filesystem::copy_file(backup_file_path, game_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-                std::filesystem::remove(backup_file_path, err_code);
-            }
+            transfer_file(TransferType::MOVE, backup_file_path, game_file_path);
         }
 
         clear_state();
