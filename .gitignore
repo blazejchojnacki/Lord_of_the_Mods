@@ -1,3 +1,9 @@
+# # mine
+/out
+/.vs
+
+
+# # default for C++ by GitHub
 # Prerequisites
 *.d
 
