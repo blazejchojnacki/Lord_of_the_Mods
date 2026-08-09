@@ -8,8 +8,9 @@ AI involvment: Gemini Pro created the base file.
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <iostream>
 
-class ModManiest {
+class ModManifest {
 private:
     std::string id_;
     std::string name_;
@@ -17,7 +18,7 @@ private:
     std::vector<std::filesystem::path> file_list_;
 
 public:
-    ModManiest(std::string id, std::string name, std::filesystem::path mod_dir)
+    ModManifest(std::string id, std::string name, std::filesystem::path mod_dir)
         : id_(std::move(id)), name_(std::move(name)), mod_directory_(std::move(mod_dir)) {
     }
 
@@ -80,7 +81,7 @@ public:
         return true;
     }
 
-    bool deactivate(const Mod& mod) {
+    bool deactivate(const ModManifest& mod) {
         std::error_code err_code;
 
         for (const auto& rel_path : mod.get_file_list()) {
