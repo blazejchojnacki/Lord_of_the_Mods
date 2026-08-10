@@ -53,6 +53,8 @@ class ModInstaller {
 private:
     std::filesystem::path game_directory_;
     std::filesystem::path backup_directory_;
+
+
     std::filesystem::path state_file_path_;
 
     void write_state(const std::string& mod_id, const std::string& status) {
@@ -66,6 +68,20 @@ private:
         std::error_code err_code;
         if (std::filesystem::exists(state_file_path_)) {
             std::filesystem::remove(state_file_path_, err_code);
+        }
+    }
+
+    void enlist_manifest(const ModManifest& mod, std::vector<FileData> &backup_manifest, std::vector<FileData> &forward_manifest) {
+        
+        for (const auto& file_data : mod.get_file_list()) {
+
+            auto backup_data = file_data;
+            backup_data.transfer_type = TransferType::MOVE;
+            backup_manifest.push_back(backup_data);
+
+            if (file_data.transfer_type == TransferType::COPY or file_data.transfer_type == TransferType::MOVE) {
+                forward_manifest.push_back(file_data);
+            }
         }
     }
 
@@ -102,8 +118,11 @@ private:
         }
     }
 
-    bool process_manifest(const std::vector<FileData>& file_manifest, std::filesystem::path &source_directory, std::filesystem::path& destination_directory) {
+    bool process_manifest(const std::vector<FileData>& file_manifest, const std::filesystem::path &source_directory,
+        const std::filesystem::path& destination_directory, std::vector<FileData>& rollback_manifest) {
         for (const auto& file_data : file_manifest) {
+            auto rollback_data = file_data;
+
             auto rel_path = file_data.relative_path;
             std::filesystem::path source_file_path = source_directory / rel_path;
             std::filesystem::path destination_file_path = destination_directory / rel_path;
@@ -111,6 +130,9 @@ private:
             auto transfer_type = file_data.transfer_type;
             if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
                 transfer_file(transfer_type, source_file_path, destination_file_path);
+
+                rollback_data.transfer_type == TransferType::MOVE;
+                rollback_manifest.push_back(rollback_data);
             }
             else if (transfer_type == TransferType::DELETE) {
                 transfer_file(transfer_type, destination_file_path);
@@ -133,52 +155,25 @@ public:
 
     bool activate(const ModManifest& mod) {
         std::error_code err_code;
-        std::vector<FileData> processed_files;
+        std::vector<FileData> rollback_manifest;
 
         // Transaction Log: Mark installation as started
         write_state(mod.get_id(), "INSTALLING");
 
-        if (!process_manifest(mod.get_file_list(), game_directory_, backup_directory_)) {
+        std::vector<FileData> backup_manifest;
+        std::vector<FileData> forward_manifest;
+        enlist_manifest(mod, backup_manifest, forward_manifest);
+
+        if (!process_manifest(backup_manifest, game_directory_, backup_directory_, rollback_manifest)) {
             std::cerr << "Error. processing rollback" << std::endl;
-            rollback(processed_files);
+            rollback(rollback_manifest);
             return false;
         }
-
-        //for (const auto& rel_path : mod.get_file_list()) {
-        //    std::filesystem::path mod_file_path = mod.get_mod_dir() / rel_path;
-        //    std::filesystem::path game_file_path = game_directory_ / rel_path;
-        //    std::filesystem::path backup_file_path = backup_directory_ / rel_path;
-
-        //    if (!std::filesystem::exists(mod_file_path)) {
-        //        std::cerr << "Mod file missing: " << mod_file_path << std::endl;
-        //        rollback(processed_files);
-        //        return false;
-        //    }
-
-        //    // move to backup
-        //    transfer_file(TransferType::MOVE, game_file_path, backup_file_path);
-            //if (std::filesystem::exists(game_file_path) && !std::filesystem::exists(backup_file_path)) {
-            //    std::filesystem::create_directories(backup_file_path.parent_path());
-            //    std::filesystem::copy_file(game_file_path, backup_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-            //    if (err_code) {
-            //        std::cerr << "Backup failed for " << game_file_path << ": " << err_code.message() << std::endl;
-            //        rollback(processed_files);
-            //        return false;
-            //    }
-            //}
-
-            // copy from mod to game
-            //transfer_file(TransferType::COPY, mod_file_path, game_file_path);
-            //std::filesystem::create_directories(game_file_path.parent_path());
-            //std::filesystem::copy_file(mod_file_path, game_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-            //if (err_code) {
-            //    std::cerr << "File copy failed for " << rel_path << ": " << err_code.message() << std::endl;
-            //    rollback(processed_files);
-            //    return false;
-            //}
-
-            // Track successful copies for potential rollback
-            processed_files.push_back(rel_path);
+        // TODO: clean rollback
+        if (!process_manifest(forward_manifest, mod.get_mod_dir(), game_directory_, rollback_manifest)) {
+            std::cerr << "Error. processing rollback" << std::endl;
+            rollback(rollback_manifest);
+            return false;
         }
 
         // Transaction Log: Mark installation as successfully completed
