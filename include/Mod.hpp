@@ -1,7 +1,7 @@
 /*
 author: blazejchojnacki
 project: Lord_of_the_Mods
-AI involvement: Gemini Pro refined with atomic rollback and state manifest.
+AI involvement: Gemini Pro refined with atomic rollback and robust error-handling.
 */
 
 #pragma once
@@ -73,7 +73,7 @@ private:
 
     void clear_state() {
         std::error_code err_code;
-        if (std::filesystem::exists(state_file_path_)) {
+        if (std::filesystem::exists(state_file_path_, err_code)) {
             std::filesystem::remove(state_file_path_, err_code);
         }
     }
@@ -81,7 +81,7 @@ private:
     void enlist_activation_manifest(const ModManifest& mod) {
         backup_manifest.clear();
         forward_manifest.clear();
-        
+
         for (const auto& file_data : mod.get_file_list()) {
 
             auto backup_data = file_data;
@@ -111,37 +111,57 @@ private:
         }
     }
 
-    void transfer_file(TransferType transfer_type, const std::filesystem::path& file_path) {
+    bool transfer_file(TransferType transfer_type, const std::filesystem::path& file_path) {
         std::error_code err_code;
         if (transfer_type == TransferType::DELETE) {
-            if (std::filesystem::exists(file_path)) {
+            if (std::filesystem::exists(file_path, err_code)) {
                 std::filesystem::remove(file_path, err_code);
-            }
-        }
-        if (err_code) {
-            // raise error?
-            std::cerr << "File transfer failed: " << file_path << std::endl;
-        }
-    }
-
-    void transfer_file(TransferType transfer_type, const std::filesystem::path &source_file_path, const std::filesystem::path &destination_file_path) {
-        std::error_code err_code;
-        if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
-            if (std::filesystem::exists(destination_file_path)) {
-                std::filesystem::remove(destination_file_path, err_code);
-            }
-            if (std::filesystem::exists(source_file_path)) {
-                std::filesystem::create_directories(destination_file_path.parent_path());
-                std::filesystem::copy_file(source_file_path, destination_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
-                if (transfer_type == TransferType::MOVE) {
-                    std::filesystem::remove(source_file_path, err_code);
+                if (err_code) {
+                    std::cerr << "[ERROR] Failed to delete file: " << file_path << " - " << err_code.message() << std::endl;
+                    return false;
                 }
             }
         }
-        if (err_code) {
-            // raise error?
-            std::cerr << "File transfer failed: " << source_file_path << std::endl;
+        return true;
+    }
+
+    bool transfer_file(TransferType transfer_type, const std::filesystem::path& source_file_path, const std::filesystem::path& destination_file_path) {
+        std::error_code err_code;
+        if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
+            if (std::filesystem::exists(destination_file_path, err_code)) {
+                std::filesystem::remove(destination_file_path, err_code);
+                if (err_code) {
+                    std::cerr << "[ERROR] Failed to remove existing destination: " << destination_file_path << " - " << err_code.message() << std::endl;
+                    return false;
+                }
+            }
+
+            if (!std::filesystem::exists(source_file_path, err_code)) {
+                std::cerr << "[ERROR] Source file does not exist: " << source_file_path << std::endl;
+                return false;
+            }
+
+            std::filesystem::create_directories(destination_file_path.parent_path(), err_code);
+            if (err_code) {
+                std::cerr << "[ERROR] Failed to create directories for: " << destination_file_path << " - " << err_code.message() << std::endl;
+                return false;
+            }
+
+            std::filesystem::copy_file(source_file_path, destination_file_path, std::filesystem::copy_options::overwrite_existing, err_code);
+            if (err_code) {
+                std::cerr << "[ERROR] File copy failed from " << source_file_path << " to " << destination_file_path << " - " << err_code.message() << std::endl;
+                return false;
+            }
+
+            if (transfer_type == TransferType::MOVE) {
+                std::filesystem::remove(source_file_path, err_code);
+                if (err_code) {
+                    std::cerr << "[ERROR] Failed to remove source file during move operation: " << source_file_path << " - " << err_code.message() << std::endl;
+                    return false;
+                }
+            }
         }
+        return true;
     }
 
     bool process_manifest(const std::vector<FileData>& file_manifest, const std::filesystem::path &source_directory,
@@ -157,14 +177,22 @@ private:
             std::filesystem::path destination_file_path = destination_directory / rel_path;
 
             auto transfer_type = file_data.transfer_type;
+            bool success = true;
+
             if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
-                transfer_file(transfer_type, source_file_path, destination_file_path);
+                success = transfer_file(transfer_type, source_file_path, destination_file_path);
+                if (!success) {
+                    return false;
+                }
 
                 rollback_data.transfer_type = TransferType::MOVE;
                 rollback_manifest.push_back(rollback_data);
             }
             else if (transfer_type == TransferType::DELETE) {
-                transfer_file(transfer_type, destination_file_path);
+                success = transfer_file(transfer_type, destination_file_path);
+                if (!success) {
+                    return false;
+                }
             }
         }
         return true;
@@ -183,8 +211,6 @@ public:
     }
 
     bool activate(const ModManifest& mod) {
-        std::error_code err_code;
-
         // Transaction Log: Mark installation as started
         write_state(mod.get_id(), "INSTALLING");
 
@@ -194,16 +220,18 @@ public:
 
         if (process_manifest(backup_manifest, game_directory_, backup_directory_)) {
             restore_manifest = rollback_manifest;
-        } else {
-            std::cerr << "Error. processing rollback" << std::endl;
+        }
+        else {
+            std::cerr << "[ERROR] Processing backup phase failed. Rolling back..." << std::endl;
             rollback(rollback_manifest);
             return false;
         }
-        
+
         if (process_manifest(forward_manifest, mod.get_mod_dir(), game_directory_)) {
             retrieve_manifest = rollback_manifest;
-        } else {
-            std::cerr << "Error. processing rollback" << std::endl;
+        }
+        else {
+            std::cerr << "[ERROR] Processing forward install phase failed. Rolling back..." << std::endl;
             rollback(rollback_manifest);
             return false;
         }
@@ -216,24 +244,24 @@ public:
     }
 
     bool deactivate(const ModManifest& mod) {
-        std::error_code err_code;
-
         if (retrieve_manifest.empty() or restore_manifest.empty()) {
             enlist_deactivation_manifest(mod);
         }
 
         if (process_manifest(retrieve_manifest, game_directory_, mod.get_mod_dir())) {
             forward_manifest = rollback_manifest;
-        } else {
-            std::cerr << "Error. processing rollback" << std::endl;
+        }
+        else {
+            std::cerr << "[ERROR] Processing retrieve phase during deactivation failed. Rolling back..." << std::endl;
             rollback(rollback_manifest);
             return false;
         }
 
         if (process_manifest(restore_manifest, backup_directory_, game_directory_)) {
             backup_manifest = rollback_manifest;
-        } else {
-            std::cerr << "Error. processing rollback" << std::endl;
+        }
+        else {
+            std::cerr << "[ERROR] Processing restore phase during deactivation failed. Rolling back..." << std::endl;
             rollback(rollback_manifest);
             return false;
         }
