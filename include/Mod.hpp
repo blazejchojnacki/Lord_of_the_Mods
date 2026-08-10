@@ -54,6 +54,13 @@ private:
     std::filesystem::path game_directory_;
     std::filesystem::path backup_directory_;
 
+    std::vector<FileData> backup_manifest;
+    std::vector<FileData> forward_manifest;
+
+    std::vector<FileData> retrieve_manifest;
+    std::vector<FileData> restore_manifest;
+
+    std::vector<FileData> rollback_manifest;
 
     std::filesystem::path state_file_path_;
 
@@ -71,7 +78,7 @@ private:
         }
     }
 
-    void enlist_manifest(const ModManifest& mod, std::vector<FileData> &backup_manifest, std::vector<FileData> &forward_manifest) {
+    void enlist_manifest(const ModManifest& mod) {
         
         for (const auto& file_data : mod.get_file_list()) {
 
@@ -98,7 +105,7 @@ private:
         }
     }
 
-    void transfer_file(TransferType transfer_type, const std::filesystem::path &source_file_path, std::filesystem::path &destination_file_path) {
+    void transfer_file(TransferType transfer_type, const std::filesystem::path &source_file_path, const std::filesystem::path &destination_file_path) {
         std::error_code err_code;
         if (transfer_type == TransferType::COPY and transfer_type == TransferType::MOVE) {
             if (std::filesystem::exists(destination_file_path)) {
@@ -119,7 +126,10 @@ private:
     }
 
     bool process_manifest(const std::vector<FileData>& file_manifest, const std::filesystem::path &source_directory,
-        const std::filesystem::path& destination_directory, std::vector<FileData>& rollback_manifest) {
+        const std::filesystem::path& destination_directory) {
+
+        // TODO: clear rollback_manifest
+
         for (const auto& file_data : file_manifest) {
             auto rollback_data = file_data;
 
@@ -155,22 +165,23 @@ public:
 
     bool activate(const ModManifest& mod) {
         std::error_code err_code;
-        std::vector<FileData> rollback_manifest;
 
         // Transaction Log: Mark installation as started
         write_state(mod.get_id(), "INSTALLING");
 
-        std::vector<FileData> backup_manifest;
-        std::vector<FileData> forward_manifest;
-        enlist_manifest(mod, backup_manifest, forward_manifest);
+        enlist_manifest(mod);
 
-        if (!process_manifest(backup_manifest, game_directory_, backup_directory_, rollback_manifest)) {
+        if (process_manifest(backup_manifest, game_directory_, backup_directory_)) {
+            restore_manifest = rollback_manifest;
+        } else {
             std::cerr << "Error. processing rollback" << std::endl;
             rollback(rollback_manifest);
             return false;
         }
-        // TODO: clean rollback
-        if (!process_manifest(forward_manifest, mod.get_mod_dir(), game_directory_, rollback_manifest)) {
+        
+        if (process_manifest(forward_manifest, mod.get_mod_dir(), game_directory_)) {
+            retrieve_manifest = rollback_manifest;
+        } else {
             std::cerr << "Error. processing rollback" << std::endl;
             rollback(rollback_manifest);
             return false;
@@ -184,11 +195,20 @@ public:
     bool deactivate(const ModManifest& mod) {
         std::error_code err_code;
 
-        for (const auto& rel_path : mod.get_file_list()) {
-            std::filesystem::path game_file_path = game_directory_ / rel_path;
-            std::filesystem::path backup_file_path = backup_directory_ / rel_path;
+        if (process_manifest(retrieve_manifest, game_directory_, mod.get_mod_dir())) {
+            forward_manifest = rollback_manifest;
+        } else {
+            std::cerr << "Error. processing rollback" << std::endl;
+            rollback(rollback_manifest);
+            return false;
+        }
 
-            transfer_file(TransferType::MOVE, backup_file_path, game_file_path);
+        if (process_manifest(restore_manifest, backup_directory_, game_directory_)) {
+            backup_manifest = rollback_manifest;
+        } else {
+            std::cerr << "Error. processing rollback" << std::endl;
+            rollback(rollback_manifest);
+            return false;
         }
 
         clear_state();
