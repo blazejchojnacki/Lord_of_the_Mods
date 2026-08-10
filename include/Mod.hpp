@@ -78,7 +78,9 @@ private:
         }
     }
 
-    void enlist_manifest(const ModManifest& mod) {
+    void enlist_activation_manifest(const ModManifest& mod) {
+        backup_manifest.clear();
+        forward_manifest.clear();
         
         for (const auto& file_data : mod.get_file_list()) {
 
@@ -89,6 +91,23 @@ private:
             if (file_data.transfer_type == TransferType::COPY or file_data.transfer_type == TransferType::MOVE) {
                 forward_manifest.push_back(file_data);
             }
+        }
+    }
+
+    void enlist_deactivation_manifest(const ModManifest& mod) {
+        retrieve_manifest.clear();
+        restore_manifest.clear();
+
+        for (const auto& file_data : mod.get_file_list()) {
+            if (file_data.transfer_type == TransferType::COPY or file_data.transfer_type == TransferType::MOVE) {
+                auto retrieve_data = file_data;
+                retrieve_data.transfer_type = TransferType::MOVE;
+                retrieve_manifest.push_back(retrieve_data);
+            }
+
+            auto restore_data = file_data;
+            restore_data.transfer_type = TransferType::MOVE;
+            restore_manifest.push_back(restore_data);
         }
     }
 
@@ -107,7 +126,7 @@ private:
 
     void transfer_file(TransferType transfer_type, const std::filesystem::path &source_file_path, const std::filesystem::path &destination_file_path) {
         std::error_code err_code;
-        if (transfer_type == TransferType::COPY and transfer_type == TransferType::MOVE) {
+        if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
             if (std::filesystem::exists(destination_file_path)) {
                 std::filesystem::remove(destination_file_path, err_code);
             }
@@ -128,7 +147,7 @@ private:
     bool process_manifest(const std::vector<FileData>& file_manifest, const std::filesystem::path &source_directory,
         const std::filesystem::path& destination_directory) {
 
-        // TODO: clear rollback_manifest
+        rollback_manifest.clear();
 
         for (const auto& file_data : file_manifest) {
             auto rollback_data = file_data;
@@ -141,7 +160,7 @@ private:
             if (transfer_type == TransferType::COPY or transfer_type == TransferType::MOVE) {
                 transfer_file(transfer_type, source_file_path, destination_file_path);
 
-                rollback_data.transfer_type == TransferType::MOVE;
+                rollback_data.transfer_type = TransferType::MOVE;
                 rollback_manifest.push_back(rollback_data);
             }
             else if (transfer_type == TransferType::DELETE) {
@@ -169,7 +188,9 @@ public:
         // Transaction Log: Mark installation as started
         write_state(mod.get_id(), "INSTALLING");
 
-        enlist_manifest(mod);
+        if (backup_manifest.empty() or forward_manifest.empty()) {
+            enlist_activation_manifest(mod);
+        }
 
         if (process_manifest(backup_manifest, game_directory_, backup_directory_)) {
             restore_manifest = rollback_manifest;
@@ -189,11 +210,17 @@ public:
 
         // Transaction Log: Mark installation as successfully completed
         write_state(mod.get_id(), "COMPLETE");
+        backup_manifest.clear();
+        forward_manifest.clear();
         return true;
     }
 
     bool deactivate(const ModManifest& mod) {
         std::error_code err_code;
+
+        if (retrieve_manifest.empty() or restore_manifest.empty()) {
+            enlist_deactivation_manifest(mod);
+        }
 
         if (process_manifest(retrieve_manifest, game_directory_, mod.get_mod_dir())) {
             forward_manifest = rollback_manifest;
@@ -212,6 +239,8 @@ public:
         }
 
         clear_state();
+        retrieve_manifest.clear();
+        restore_manifest.clear();
         return true;
     }
 };
