@@ -1,6 +1,8 @@
 # # mine
 /out
+/__out
 /.vs
+/__.vs
 
 
 # # default for C++ by GitHub
