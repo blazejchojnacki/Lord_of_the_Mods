@@ -2,9 +2,7 @@ import os
 import shutil
 from pathlib import Path
 
-# Import your compiled C++ module
-# (Ensure you have run `pip install .` so pybind11 has built the .pyd file)
-import lotm
+import lotm # project compiled C++ module
 
 def create_mock_file(path: Path, content: str):
     """Utility to create directories and write a text file."""
@@ -23,26 +21,28 @@ def main():
     print("  Python Mod Installer Sandbox Test   ")
     print("======================================\n")
 
-    # 1. Setup Sandbox Paths using modern pathlib
-    sandbox = Path("./python_sandbox")
-    game_dir = sandbox / "game"
-    backup_dir = sandbox / "backup"
-    mod_dir = sandbox / "mods" / "elven_mod"
+    # Setup Sandbox Paths using modern pathlib
+    sandbox = Path("./tests/sandbox")
+    game_dir = sandbox / "test_game"
+    backup_dir = sandbox / "test_backup"
+    mod_dir = sandbox / "test_mods" / "test_mod1"
 
-    # Clean up previous runs to ensure a fresh test environment
-    if sandbox.exists():
-        shutil.rmtree(sandbox)
-
-    # 2. Generate Mock Files
-    print("--- STEP 1: Setting up mock files ---")
     target_file = Path("data/ini/gamedata.ini")
-    create_mock_file(game_dir / target_file, "VANILLA_DATA")
-    create_mock_file(mod_dir / target_file, "MODDED_DATA")
+
+    if restart := False:
+        # Clean up previous runs to ensure a fresh test environment
+        if sandbox.exists():
+            shutil.rmtree(sandbox)
+
+        # Generate Mock Files
+        print("--- STEP 1: Setting up mock files ---")
+        create_mock_file(game_dir / target_file, "VANILLA_DATA")
+        create_mock_file(mod_dir / target_file, "MODDED_DATA")
     
     print("Original Game File:")
     print_file_status(game_dir / target_file)
 
-    # 3. Initialize C++ Objects via Python Bindings
+    # Initialize C++ Objects via Python Bindings
     print("\n--- STEP 2: Initializing C++ Core ---")
     
     # Instantiate the C++ struct and set its properties
@@ -58,7 +58,7 @@ def main():
     installer = lotm.ModInstaller(str(game_dir), str(backup_dir))
     print("C++ Core initialized successfully.")
 
-    # 4. Test Activation
+    # Test Activation
     print("\n--- STEP 3: Activating Mod ---")
     success = installer.activate(test_mod)
     print(f"Activation Result: {'SUCCESS' if success else 'FAILED'}")
@@ -75,6 +75,7 @@ def main():
 
     print("\nFile States Post-Deactivation:")
     print(f"Game:   ", end=""); print_file_status(game_dir / target_file)
+    print(f"Mod:    ", end=""); print_file_status(mod_dir / target_file)
     print(f"Backup: ", end=""); print_file_status(backup_dir / target_file)
 
 # Standard Python execution block
