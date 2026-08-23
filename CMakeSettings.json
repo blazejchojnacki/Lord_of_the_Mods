@@ -9,7 +9,14 @@
       "installRoot": "${projectDir}\\out\\install\\${name}",
       "cmakeCommandArgs": "",
       "buildCommandArgs": "",
-      "ctestCommandArgs": ""
+      "ctestCommandArgs": "",
+      "variables": [
+        {
+          "name": "PYTHON_EXECUTABLE",
+          "value": "O:/Lord_of_the_Mods/venv/Scripts/python.exe",
+          "type": "FILEPATH"
+        }
+      ]
     }
   ]
 }
